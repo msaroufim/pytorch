@@ -130,6 +130,12 @@ def count_bytes_inner(gm, example_inputs, num_fixed=0, **kwargs):
 
 from rich import inspect
 
+def larger_closest_multiple(n, k = 16):
+    if n % k == 0:
+        return n
+    else:
+        return n + k - (n % k)    
+
 def pad_shape(gm : torch.fx.GraphModule):
     # gm.print_readable()
     # padded = torch.nn.ConstantPad1d()
@@ -137,10 +143,17 @@ def pad_shape(gm : torch.fx.GraphModule):
 
     for node in gm.graph.nodes:
         if node.op == "call_function":
+            # TODO: We might want to also support padding other ops
             if str(node) == "addmm":
-                print(get_alignment_size(node.meta["tensor_meta"]))
-                print(get_node_shape(node))
-    # inspect(gm.graph.nodes)
+                alignment : int =  get_alignment_size(node.meta["tensor_meta"])
+                linear_shape = get_node_shape(node)
+                padding_function = torch.nn.ConstantPad1d((0, alignment - linear_shape[1] % alignment), 0)
+                # gm.graph.call_function(padding_function, (alignment, linear_shape))
+                linear_shape_str = str(linear_shape).replace(".", "_")
+                gm.add_module(f"pad_{linear_shape_str}_{alignment}", padding_function)
+                gm.graph.call_module(f"pad_{linear_shape_str}_{alignment}", args=(node.next,))
+                gm.recompile()
+                gm.print_readable()
 
 def get_node_shape(node : torch.fx.Node) -> torch.Size:
     return node.meta["tensor_meta"].shape
@@ -156,7 +169,7 @@ def get_alignment_size(x):
         has_a100 = False
     if x.dtype == torch.int8:
         return 128 if has_a100 else 16
-    elif x.dtype == torch.float16 or x.dtype == torch.half or x.dtype == torch.bfloat16:
+    elif x.dtype in [torch.float16, torch.half, torch.bfloat16]:
         return 64 if has_a100 else 8
     elif x.dtype == torch.float32:
         return 32 if has_a100 else 4
