@@ -147,11 +147,27 @@ def pad_shape(gm : torch.fx.GraphModule):
             if str(node) == "addmm":
                 alignment : int =  get_alignment_size(node.meta["tensor_meta"])
                 linear_shape = get_node_shape(node)
-                padding_function = torch.nn.ConstantPad1d((0, alignment - linear_shape[1] % alignment), 0)
-                # gm.graph.call_function(padding_function, (alignment, linear_shape))
-                linear_shape_str = str(linear_shape).replace(".", "_")
-                gm.add_module(f"pad_{linear_shape_str}_{alignment}", padding_function)
-                gm.graph.call_module(f"pad_{linear_shape_str}_{alignment}", args=(node.next,))
+                padding_function = lambda alignment, linear_shape : torch.nn.ConstantPad1d((0, alignment - linear_shape[1] % alignment), 0)
+                
+                with gm.graph.inserting_before(node):
+                    # This works with the aten op but my custom padding function is faling with __name__ not found
+                    # gm.graph.call_function([[torch.ops.aten.pad.default]], (alignment, linear_shape))
+                    torch._dynamo.config.suppress_errors = True
+                    # inspect(torch.ops.aten.pad.default)
+
+                    gm.graph.call_function(torch.ops.aten.pad.default, (node, alignment))
+
+                    # print(torch.ops.aten.pad.default.__name__)
+                    # This works and prints pad.default
+
+                    # AttributeError: attribute '__name__' of 'builtin_function_or_method' objects is not writable
+                    # setattr(torch.nn.functional.pad, "__name__", "torch.nn.functional.pad")
+                    # gm.graph.call_function(torch.nn.functional.pad, ())
+                
+                # Tried to give the pad op a nier name here but might not be necessary
+                # linear_shape_str = str(linear_shape).replace(".", "_")
+                # gm.add_module(f"pad_{linear_shape_str}_{alignment}", padding_function)
+                # gm.graph.call_module(f"pad_{linear_shape_str}_{alignment}", args=(node.next,))
                 gm.recompile()
                 gm.print_readable()
 
