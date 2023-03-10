@@ -147,15 +147,20 @@ def pad_shape(gm : torch.fx.GraphModule):
             if str(node) == "addmm":
                 alignment : int =  get_alignment_size(node.meta["tensor_meta"])
                 linear_shape = get_node_shape(node)
-                padding_function = lambda alignment, linear_shape : torch.nn.ConstantPad1d((0, alignment - linear_shape[1] % alignment), 0)
+                pad_amounts = [larger_closest_multiple(shape, alignment) for shape in linear_shape]
+
+                print(alignment)
+                print(linear_shape)
+                print(pad_amounts)
+                # padding_function = lambda alignment, linear_shape : torch.nn.ConstantPad1d((0, alignment - linear_shape[1] % alignment), 0)
                 
-                with gm.graph.inserting_before(node):
+                # Inserting before makes more sense but it's tricky because you need to know size of tensor before you pad it
+                with gm.graph.inserting_after(node):
                     # This works with the aten op but my custom padding function is faling with __name__ not found
                     # gm.graph.call_function([[torch.ops.aten.pad.default]], (alignment, linear_shape))
                     torch._dynamo.config.suppress_errors = True
                     # inspect(torch.ops.aten.pad.default)
-
-                    gm.graph.call_function(torch.ops.aten.pad.default, (node, alignment))
+                    gm.graph.call_function(torch.ops.aten.pad.default, (node, [*pad_amounts]))
 
                     # print(torch.ops.aten.pad.default.__name__)
                     # This works and prints pad.default
